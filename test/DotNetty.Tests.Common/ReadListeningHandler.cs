@@ -5,27 +5,41 @@ namespace DotNetty.Tests.Common
 {
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics.Contracts;
     using System.Threading.Tasks;
     using DotNetty.Transport.Channels;
 
     public sealed class ReadListeningHandler : ChannelHandlerAdapter
     {
         readonly Queue<object> receivedQueue = new Queue<object>();
-        TaskCompletionSource<object> readPromise;
-        Exception registeredException;
+        readonly Queue<TaskCompletionSource<object>> readPromises = new Queue<TaskCompletionSource<object>>();
+        readonly TimeSpan defaultReadTimeout;
+        readonly object gate = new object();
+
+        volatile Exception registeredException;
+
+        public ReadListeningHandler()
+            : this(TimeSpan.Zero)
+        {
+        }
+
+        public ReadListeningHandler(TimeSpan defaultReadTimeout)
+        {
+            this.defaultReadTimeout = defaultReadTimeout;
+        }
 
         public override void ChannelRead(IChannelHandlerContext context, object message)
         {
-            TaskCompletionSource<object> promise = this.readPromise;
-            if (this.readPromise != null)
+            lock (this.gate)
             {
-                this.readPromise = null;
-                promise.TrySetResult(message);
-            }
-            else
-            {
-                this.receivedQueue.Enqueue(message);
+                if (this.readPromises.Count > 0)
+                {
+                    TaskCompletionSource<object> promise = this.readPromises.Dequeue();
+                    promise.TrySetResult(message);
+                }
+                else
+                {
+                    this.receivedQueue.Enqueue(message);
+                }
             }
         }
 
@@ -40,26 +54,37 @@ namespace DotNetty.Tests.Common
         void SetException(Exception exception)
         {
             this.registeredException = exception;
-            this.readPromise?.TrySetException(exception);
+
+            lock (this.gate)
+            {
+                while (this.readPromises.Count > 0)
+                {
+                    TaskCompletionSource<object> promise = this.readPromises.Dequeue();
+                    promise.TrySetException(exception);
+                }
+            }
         }
 
         public async Task<object> ReceiveAsync(TimeSpan timeout = default(TimeSpan))
         {
-            Contract.Assert(this.readPromise == null);
-
             if (this.registeredException != null)
             {
                 throw this.registeredException;
             }
 
-            if (this.receivedQueue.Count > 0)
+            var promise = new TaskCompletionSource<object>();
+
+            lock (this.gate)
             {
-                return this.receivedQueue.Dequeue();
+                if (this.receivedQueue.Count > 0)
+                {
+                    return this.receivedQueue.Dequeue();
+                }
+
+                this.readPromises.Enqueue(promise);
             }
 
-            var promise = new TaskCompletionSource<object>();
-            this.readPromise = promise;
-
+            timeout = timeout <= TimeSpan.Zero ? this.defaultReadTimeout : timeout;
             if (timeout > TimeSpan.Zero)
             {
                 Task task = await Task.WhenAny(promise.Task, Task.Delay(timeout));

@@ -9,7 +9,11 @@ namespace DotNetty.Common.Concurrency
     using System.Threading.Tasks;
     using DotNetty.Common.Internal;
     using DotNetty.Common.Internal.Logging;
+    using Thread = XThread;
 
+    /// <summary>
+    /// <see cref="IEventExecutor"/> backed by a single thread.
+    /// </summary>
     public class SingleThreadEventExecutor : AbstractScheduledEventExecutor
     {
 #pragma warning disable 420 // referencing volatile fields is fine in Interlocked methods
@@ -38,21 +42,30 @@ namespace DotNetty.Common.Concurrency
         PreciseTimeSpan gracefulShutdownQuietPeriod;
         PreciseTimeSpan gracefulShutdownTimeout;
 
+        /// <summary>Creates a new instance of <see cref="SingleThreadEventExecutor"/>.</summary>
         public SingleThreadEventExecutor(string threadName, TimeSpan breakoutInterval)
-            : this(threadName, breakoutInterval, new CompatibleConcurrentQueue<IRunnable>())
+            : this(null, threadName, breakoutInterval, new CompatibleConcurrentQueue<IRunnable>())
+        {
+        }
+
+        /// <summary>Creates a new instance of <see cref="SingleThreadEventExecutor"/>.</summary>
+        public SingleThreadEventExecutor(IEventExecutorGroup parent, string threadName, TimeSpan breakoutInterval)
+            : this(parent, threadName, breakoutInterval, new CompatibleConcurrentQueue<IRunnable>())
         {
         }
 
         protected SingleThreadEventExecutor(string threadName, TimeSpan breakoutInterval, IQueue<IRunnable> taskQueue)
+            : this(null, threadName, breakoutInterval, taskQueue)
+        { }
+
+        protected SingleThreadEventExecutor(IEventExecutorGroup parent, string threadName, TimeSpan breakoutInterval, IQueue<IRunnable> taskQueue)
+            : base(parent)
         {
             this.terminationCompletionSource = new TaskCompletionSource();
             this.taskQueue = taskQueue;
             this.preciseBreakoutInterval = PreciseTimeSpan.FromTimeSpan(breakoutInterval);
             this.scheduler = new ExecutorTaskScheduler(this);
-            this.thread = new Thread(this.Loop)
-            {
-                IsBackground = true
-            };
+            this.thread = new Thread(this.Loop);
             if (string.IsNullOrEmpty(threadName))
             {
                 this.thread.Name = DefaultWorkerThreadName;
@@ -76,28 +89,43 @@ namespace DotNetty.Common.Concurrency
             Task.Factory.StartNew(
                 () =>
                 {
-                    Interlocked.CompareExchange(ref this.executionState, ST_STARTED, ST_NOT_STARTED);
-                    while (!this.ConfirmShutdown())
+                    try
                     {
-                        this.RunAllTasks(this.preciseBreakoutInterval);
+                        Interlocked.CompareExchange(ref this.executionState, ST_STARTED, ST_NOT_STARTED);
+                        while (!this.ConfirmShutdown())
+                        {
+                            this.RunAllTasks(this.preciseBreakoutInterval);
+                        }
+                        this.CleanupAndTerminate(true);
                     }
-                    this.CleanupAndTerminate(true);
+                    catch (Exception ex)
+                    {
+                        Logger.Error("{}: execution loop failed", this.thread.Name, ex);
+                        this.executionState = ST_TERMINATED;
+                        this.terminationCompletionSource.TrySetException(ex);
+                    }
                 },
                 CancellationToken.None,
                 TaskCreationOptions.None,
                 this.scheduler);
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override bool IsShuttingDown => this.executionState >= ST_SHUTTING_DOWN;
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override Task TerminationCompletion => this.terminationCompletionSource.Task;
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override bool IsShutdown => this.executionState >= ST_SHUTDOWN;
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override bool IsTerminated => this.executionState == ST_TERMINATED;
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override bool IsInEventLoop(Thread t) => this.thread == t;
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override void Execute(IRunnable task)
         {
             this.taskQueue.TryEnqueue(task);
@@ -116,6 +144,7 @@ namespace DotNetty.Common.Concurrency
             }
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public override Task ShutdownGracefullyAsync(TimeSpan quietPeriod, TimeSpan timeout)
         {
             Contract.Requires(quietPeriod >= TimeSpan.Zero);
@@ -296,15 +325,7 @@ namespace DotNetty.Common.Concurrency
 
             while (true)
             {
-                try
-                {
-                    task.Run();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn("A task raised an exception.", ex);
-                }
-
+                SafeExecute(task);
                 task = this.PollTask();
                 if (task == null)
                 {
@@ -328,14 +349,7 @@ namespace DotNetty.Common.Concurrency
             PreciseTimeSpan executionTime;
             while (true)
             {
-                try
-                {
-                    task.Run();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn("A task raised an exception.", ex);
-                }
+                SafeExecute(task);
 
                 runTasks++;
 
@@ -395,11 +409,8 @@ namespace DotNetty.Common.Concurrency
                         PreciseTimeSpan wakeupTimeout = nextScheduledTask.Deadline - PreciseTimeSpan.FromStart;
                         if (wakeupTimeout.Ticks > 0)
                         {
-                            if (this.emptyEvent.Wait(wakeupTimeout.ToTimeSpan()))
-                            {
-                                // woken up before the next scheduled task was due
-                                this.taskQueue.TryDequeue(out task);
-                            }
+                            double timeout = wakeupTimeout.ToTimeSpan().TotalMilliseconds;
+                            this.emptyEvent.Wait((int)Math.Min(timeout, int.MaxValue - 1));
                         }
                     }
                     else

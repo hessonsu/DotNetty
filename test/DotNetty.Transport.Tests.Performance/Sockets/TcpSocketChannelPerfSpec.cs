@@ -14,6 +14,7 @@ namespace DotNetty.Transport.Tests.Performance.Sockets
     using DotNetty.Buffers;
     using DotNetty.Codecs;
     using DotNetty.Handlers.Tls;
+    using DotNetty.Tests.Common;
     using DotNetty.Transport.Bootstrapping;
     using DotNetty.Transport.Channels;
     using DotNetty.Transport.Channels.Sockets;
@@ -73,8 +74,7 @@ namespace DotNetty.Transport.Tests.Performance.Sockets
             this.ServerGroup = new MultithreadEventLoopGroup(1);
             this.WorkerGroup = new MultithreadEventLoopGroup();
 
-            Encoding iso = Encoding.GetEncoding("ISO-8859-1");
-            this.message = iso.GetBytes("ABC");
+            this.message = Encoding.UTF8.GetBytes("ABC");
 
             this.inboundThroughputCounter = context.GetCounter(InboundThroughputCounterName);
             this.outboundThroughputCounter = context.GetCounter(OutboundThroughputCounterName);
@@ -86,14 +86,7 @@ namespace DotNetty.Transport.Tests.Performance.Sockets
             this.clientBufferAllocator = new PooledByteBufferAllocator();
 
             Assembly assembly = typeof(TcpChannelPerfSpecs).Assembly;
-            byte[] certificateData;
-            using (Stream sourceStream = assembly.GetManifestResourceStream(assembly.GetManifestResourceNames()[0]))
-            using (var tempStream = new MemoryStream())
-            {
-                sourceStream.CopyTo(tempStream);
-                certificateData = tempStream.ToArray();
-            }
-            var tlsCertificate = new X509Certificate2(certificateData, "password");
+            var tlsCertificate = TestResourceHelper.GetTestCertificate();
             string targetHost = tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
 
             ServerBootstrap sb = new ServerBootstrap()
@@ -107,7 +100,6 @@ namespace DotNetty.Transport.Tests.Performance.Sockets
                         .AddLast(this.GetEncoder())
                         .AddLast(this.GetDecoder())
                         .AddLast(counterHandler)
-                        .AddLast(new CounterHandlerOutbound(this.outboundThroughputCounter))
                         .AddLast(new ReadFinishedHandler(this.signal, WriteCount));
                 }));
 
@@ -122,7 +114,6 @@ namespace DotNetty.Transport.Tests.Performance.Sockets
                             //.AddLast(TlsHandler.Client(targetHost, null, (sender, certificate, chain, errors) => true))
                             .AddLast(this.GetEncoder())
                             .AddLast(this.GetDecoder())
-                            .AddLast(counterHandler)
                             .AddLast(new CounterHandlerOutbound(this.outboundThroughputCounter));
                     }));
 

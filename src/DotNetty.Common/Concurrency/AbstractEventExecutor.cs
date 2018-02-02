@@ -6,80 +6,119 @@ namespace DotNetty.Common.Concurrency
     using System;
     using System.Threading;
     using System.Threading.Tasks;
+    using DotNetty.Common.Internal.Logging;
+    using Thread = XThread;
 
     /// <summary>
     ///     Abstract base class for <see cref="IEventExecutor" /> implementations
     /// </summary>
     public abstract class AbstractEventExecutor : IEventExecutor
     {
-        protected static readonly TimeSpan DefaultShutdownQuietPeriod = TimeSpan.FromSeconds(2);
-        protected static readonly TimeSpan DefaultShutdownTimeout = TimeSpan.FromSeconds(15);
+        static readonly IInternalLogger Logger = InternalLoggerFactory.GetInstance<AbstractEventExecutor>();
 
-        //TODO: support for EventExecutorGroup
+        static readonly TimeSpan DefaultShutdownQuietPeriod = TimeSpan.FromSeconds(2);
+        static readonly TimeSpan DefaultShutdownTimeout = TimeSpan.FromSeconds(15);
 
+        /// <summary>Creates an instance of <see cref="AbstractEventExecutor"/>.</summary>
+        protected AbstractEventExecutor()
+            : this(null)
+        {
+        }
+
+        /// <summary>Creates an instance of <see cref="AbstractEventExecutor"/>.</summary>
+        protected AbstractEventExecutor(IEventExecutorGroup parent)
+        {
+            this.Parent = parent;
+        }
+
+        /// <inheritdoc cref="IEventExecutor"/>
         public bool InEventLoop => this.IsInEventLoop(Thread.CurrentThread);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract bool IsShuttingDown { get; }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract Task TerminationCompletion { get; }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract bool IsShutdown { get; }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract bool IsTerminated { get; }
 
+        /// <inheritdoc cref="IEventExecutor"/>
+        public IEventExecutorGroup Parent { get; }
+
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract bool IsInEventLoop(Thread thread);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract void Execute(IRunnable task);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public void Execute(Action<object> action, object state) => this.Execute(new StateActionTaskQueueNode(action, state));
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public void Execute(Action<object, object> action, object context, object state) => this.Execute(new StateActionWithContextTaskQueueNode(action, context, state));
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public void Execute(Action action) => this.Execute(new ActionTaskQueueNode(action));
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual IScheduledTask Schedule(IRunnable action, TimeSpan delay)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual IScheduledTask Schedule(Action action, TimeSpan delay)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual IScheduledTask Schedule(Action<object> action, object state, TimeSpan delay)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual IScheduledTask Schedule(Action<object, object> action, object context, object state, TimeSpan delay)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action action, TimeSpan delay) => this.ScheduleAsync(action, delay, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action<object> action, object state, TimeSpan delay, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action<object> action, object state, TimeSpan delay) => this.ScheduleAsync(action, state, delay, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action action, TimeSpan delay, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action<object, object> action, object context, object state, TimeSpan delay) => this.ScheduleAsync(action, context, state, delay, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public virtual Task ScheduleAsync(Action<object, object> action, object context, object state, TimeSpan delay, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<T> func) => this.SubmitAsync(func, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<T> func, CancellationToken cancellationToken)
         {
             var node = new FuncSubmitQueueNode<T>(func, cancellationToken);
@@ -87,8 +126,10 @@ namespace DotNetty.Common.Concurrency
             return node.Completion;
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<object, T> func, object state) => this.SubmitAsync(func, state, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<object, T> func, object state, CancellationToken cancellationToken)
         {
             var node = new StateFuncSubmitQueueNode<T>(func, state, cancellationToken);
@@ -96,8 +137,10 @@ namespace DotNetty.Common.Concurrency
             return node.Completion;
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<object, object, T> func, object context, object state) => this.SubmitAsync(func, context, state, CancellationToken.None);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task<T> SubmitAsync<T>(Func<object, object, T> func, object context, object state, CancellationToken cancellationToken)
         {
             var node = new StateFuncWithContextSubmitQueueNode<T>(func, context, state, cancellationToken);
@@ -105,11 +148,26 @@ namespace DotNetty.Common.Concurrency
             return node.Completion;
         }
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public Task ShutdownGracefullyAsync() => this.ShutdownGracefullyAsync(DefaultShutdownQuietPeriod, DefaultShutdownTimeout);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         public abstract Task ShutdownGracefullyAsync(TimeSpan quietPeriod, TimeSpan timeout);
 
+        /// <inheritdoc cref="IEventExecutor"/>
         protected void SetCurrentExecutor(IEventExecutor executor) => ExecutionEnvironment.SetCurrentExecutor(executor);
+
+        protected static void SafeExecute(IRunnable task)
+        {
+            try
+            {
+                task.Run();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("A task raised an exception. Task: {}", task, ex);
+            }
+        }
 
         #region Queuing data structures
 

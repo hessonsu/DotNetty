@@ -30,3 +30,11 @@ nuget.exe
 *.sln.ide
 *.lock.json
 *.db
+.vs/
+[Tt]ools/Cake.*
+[Tt]ools/NBench.*
+[Tt]ools/NBench
+/build/
+.dotnet/
+DotNetty.*.nuget.targets
+*.exe

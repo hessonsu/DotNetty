@@ -16,6 +16,7 @@ namespace DotNetty.Transport.Channels
     using DotNetty.Common.Concurrency;
     using DotNetty.Common.Internal.Logging;
     using DotNetty.Common.Utilities;
+    using Thread = DotNetty.Common.Concurrency.XThread;
 
     public class DefaultChannelPipeline : IChannelPipeline
     {
@@ -709,8 +710,13 @@ namespace DotNetty.Transport.Channels
         ///     the handlers are removed after all events are handled.
         ///     See: https://github.com/netty/netty/issues/3156
         /// </summary>
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        void Destroy() => this.DestroyUp(this.head.Next, false);
+        void Destroy()
+        {
+            lock (this)
+            {
+                this.DestroyUp(this.head.Next, false);
+            }
+        }
 
         void DestroyUp(AbstractChannelHandlerContext ctx, bool inEventLoop)
         {
